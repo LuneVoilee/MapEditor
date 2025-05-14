@@ -13,11 +13,11 @@ class MapState:
         self.heightmap_data = None  # 高程图数据的深拷贝
     
     @staticmethod
-    def from_map_canvas(map_canvas):
-        """从MapCanvas创建当前状态的快照
+    def from_map_controller(controller):
+        """从MapController创建当前状态的快照
         
         Args:
-            map_canvas: MapCanvas实例
+            controller: MapController实例
             
         Returns:
             MapState: 当前地图状态的快照
@@ -26,7 +26,7 @@ class MapState:
         
         # 保存省份信息
         state.provinces = []
-        for province in map_canvas.provinces:
+        for province in controller.provinces:
             # 创建省份的深拷贝
             province_copy = {
                 'name': province.name,
@@ -39,30 +39,30 @@ class MapState:
             state.provinces.append(province_copy)
         
         # 保存河流信息（河流是点列表的列表）
-        state.rivers = copy.deepcopy(map_canvas.rivers)
+        state.rivers = copy.deepcopy(controller.rivers)
         
         # 保存地块信息（保存为WKT字符串，因为shapely对象不能直接深拷贝）
         state.land_plots = []
-        for plot in map_canvas.land_plots:
+        for plot in controller.land_plots:
             if plot and plot.is_valid:
                 state.land_plots.append(plot.wkt)
         
         # 保存高程图数据
-        if map_canvas.default_map and hasattr(map_canvas.default_map, 'data'):
-            state.heightmap_data = map_canvas.default_map.data.copy()
+        if controller.default_map and hasattr(controller.default_map, 'data'):
+            state.heightmap_data = controller.default_map.data.copy()
         
         return state
     
-    def apply_to_map_canvas(self, map_canvas):
-        """将保存的状态应用到MapCanvas
+    def apply_to_map_controller(self, controller):
+        """将保存的状态应用到MapController
         
         Args:
-            map_canvas: MapCanvas实例
+            controller: MapController实例
         """
         from models.province import Province
         
         # 恢复省份
-        map_canvas.provinces = []
+        controller.provinces = []
         for province_data in self.provinces:
             province = Province(name=province_data['name'], color=province_data['color'])
             province.points = province_data['points']
@@ -76,20 +76,19 @@ class MapState:
             province._cached_path = None
             province.finalize_shape()
             
-            map_canvas.provinces.append(province)
+            controller.provinces.append(province)
         
         # 恢复河流
-        map_canvas.rivers = copy.deepcopy(self.rivers)
+        controller.rivers = copy.deepcopy(self.rivers)
         
         # 恢复地块
-        map_canvas.land_plots = []
+        controller.land_plots = []
         for plot_wkt in self.land_plots:
-            map_canvas.land_plots.append(sg.loads(plot_wkt))
+            controller.land_plots.append(sg.loads(plot_wkt))
         
         # 恢复高程图数据
-        if self.heightmap_data is not None and map_canvas.default_map:
-            map_canvas.default_map.data = self.heightmap_data.copy()
-            map_canvas.update_default_map_image()
+        if self.heightmap_data is not None and controller.default_map:
+            controller.default_map.data = self.heightmap_data.copy()
         
-        # 更新界面
-        map_canvas.update() 
+        # 发送地图更新信号
+        controller.map_changed.emit() 

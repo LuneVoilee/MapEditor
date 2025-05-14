@@ -15,14 +15,24 @@ from ui.history.history_manager import HistoryManager
 from ui.history.map_state import MapState
 
 class MapController(QObject):
-    """地图控制器，负责处理地图数据操作和工具逻辑"""
+    """地图控制器，负责处理地图数据操作和工具逻辑
+    
+    该类是地图编辑器的核心，管理所有地图数据（高程、省份、河流等），
+    提供工具逻辑实现，并通过信号机制与视图层（MapCanvasView）通信。
+    作为MVC架构中的控制器，它将数据模型与用户界面分离。
+    """
     
     # 自定义信号
-    tool_changed = pyqtSignal(str)
-    map_changed = pyqtSignal()
-    selection_changed = pyqtSignal(Province)
+    tool_changed = pyqtSignal(str)  # 工具变更信号
+    map_changed = pyqtSignal()  # 地图数据变更信号
+    selection_changed = pyqtSignal(Province)  # 选中省份变更信号
     
     def __init__(self, parent=None):
+        """初始化地图控制器
+        
+        Args:
+            parent: 父QObject
+        """
         super().__init__(parent)
         
         # 地图数据
@@ -53,7 +63,7 @@ class MapController(QObject):
         self.add_to_history()  # 保存初始状态
     
     def add_to_history(self):
-        """添加当前状态到历史记录"""
+        """添加当前状态到历史记录，用于撤销/重做功能"""
         state = MapState()
         
         # 省份数据
@@ -85,7 +95,11 @@ class MapController(QObject):
         self.history_manager.add_state(state)
     
     def undo(self):
-        """撤销操作"""
+        """撤销操作，返回到上一个历史状态
+        
+        Returns:
+            bool: 是否成功撤销
+        """
         if not self.history_manager.can_undo():
             return False
         
@@ -98,7 +112,11 @@ class MapController(QObject):
         return False
     
     def redo(self):
-        """重做操作"""
+        """重做操作，恢复到下一个历史状态
+        
+        Returns:
+            bool: 是否成功重做
+        """
         if not self.history_manager.can_redo():
             return False
         
@@ -111,7 +129,11 @@ class MapController(QObject):
         return False
     
     def _apply_state(self, state):
-        """应用历史状态"""
+        """应用历史状态
+        
+        Args:
+            state: 要应用的MapState对象
+        """
         # 恢复省份
         self.provinces = []
         for province_data in state.provinces:
@@ -145,7 +167,11 @@ class MapController(QObject):
         self.map_changed.emit()
     
     def set_tool(self, tool_name):
-        """设置当前工具"""
+        """设置当前工具
+        
+        Args:
+            tool_name: 工具名称
+        """
         # 检查是否是有效的工具名称
         valid_tools = ["select", "province", "height", "river", "continent", "plot_select"]
         if tool_name in valid_tools:
@@ -156,19 +182,38 @@ class MapController(QObject):
             print(f"警告: 未知的工具名称 '{tool_name}'")
     
     def set_brush_size(self, size):
-        """设置笔刷大小"""
+        """设置笔刷大小
+        
+        Args:
+            size: 笔刷大小（像素）
+        """
         self.brush_size = size
     
     def set_brush_strength(self, strength):
-        """设置笔刷强度"""
+        """设置笔刷强度
+        
+        Args:
+            strength: 笔刷强度值
+        """
         self.brush_strength = strength
     
     def set_color(self, color):
-        """设置当前颜色"""
+        """设置当前颜色
+        
+        Args:
+            color: QColor对象
+        """
         self.current_color = color
     
     def select_province(self, pos):
-        """选择省份"""
+        """选择省份
+        
+        Args:
+            pos: 鼠标位置（QPoint）
+            
+        Returns:
+            bool: 是否选中了省份
+        """
         x, y = pos.x(), pos.y()
         for province in self.provinces:
             if province.contains_point(x, y):
@@ -181,7 +226,11 @@ class MapController(QObject):
         return False
     
     def create_new_province(self):
-        """创建新省份"""
+        """创建新省份
+        
+        Returns:
+            Province: 新创建的省份对象
+        """
         # 随机生成颜色
         h = np.random.random()
         s = 0.5 + np.random.uniform(-0.1, 0.1)
@@ -197,7 +246,14 @@ class MapController(QObject):
         return province
     
     def add_province(self, province):
-        """添加省份到地图"""
+        """添加省份到地图
+        
+        Args:
+            province: 要添加的Province对象
+            
+        Returns:
+            bool: 是否成功添加
+        """
         if province and province not in self.provinces:
             self.provinces.append(province)
             self.add_to_history()

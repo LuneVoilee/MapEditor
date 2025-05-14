@@ -21,6 +21,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("PyQt5地图编辑器")
         self.setGeometry(100, 100, 1200, 800)
         
+        # 鼠标状态跟踪
+        self._is_left_button_pressed = False
+        
         # 应用现代样式
         self.is_dark_mode = True
         self.apply_style()
@@ -194,15 +197,14 @@ class MainWindow(QMainWindow):
         tool = self.map_controller.current_tool
         
         if button == Qt.LeftButton:
-            if tool == "province":
-                # 在笔刷范围内选择地块
-                self.map_controller.select_plots_in_brush(pos, is_adding=True)
-            elif tool == "height":
-                # TODO: 实现高程笔刷
-                pass
-            elif tool == "select":
+            # 记录左键按下状态
+            self._is_left_button_pressed = True
+            
+            # 对于未被地图画布直接处理的工具，在这里处理
+            if tool == "select":
                 # 选择省份
                 self.map_controller.select_province(pos)
+            # 旧的笔刷处理逻辑已移到地图画布中，这里不再需要
         elif button == Qt.RightButton:
             if tool == "province":
                 # 从选择中移除地块
@@ -212,14 +214,13 @@ class MainWindow(QMainWindow):
         """地图鼠标移动事件处理"""
         tool = self.map_controller.current_tool
         
-        if tool == "province" and hasattr(self, '_is_left_button_pressed') and self._is_left_button_pressed:
-            # 在鼠标拖动时持续选择地块
-            self.map_controller.select_plots_in_brush(pos, is_adding=True)
+        # 旧的笔刷处理逻辑已移到地图画布中，这里不再需要
     
     def on_map_mouse_released(self, pos, button):
         """地图鼠标释放事件处理"""
         if button == Qt.LeftButton:
             self._is_left_button_pressed = False
+            # 旧的笔刷完成逻辑已移到地图画布中
     
     def on_map_key_pressed(self, key):
         """地图键盘按下事件处理"""

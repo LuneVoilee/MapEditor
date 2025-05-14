@@ -6,15 +6,26 @@ from PyQt5.QtCore import Qt, QRect, pyqtSignal, QPoint, QTimer
 import time
 
 class MapCanvasView(QWidget):
-    """地图画布视图组件，专注于地图的绘制和基本交互"""
+    """地图画布视图组件，专注于地图的绘制和基本交互
+    
+    该类是地图编辑器的视图层，负责地图内容的可视化呈现和用户交互捕获。
+    它不直接操作地图数据，而是通过信号将用户交互传递给MapController，
+    并根据MapController的数据更新视图。这种分离使界面逻辑与数据处理逻辑解耦，
+    提高了代码的模块化和可维护性。
+    """
     
     # 交互信号
-    mouse_pressed = pyqtSignal(QPoint, Qt.MouseButton)
-    mouse_moved = pyqtSignal(QPoint)
-    mouse_released = pyqtSignal(QPoint, Qt.MouseButton)
+    mouse_pressed = pyqtSignal(QPoint, Qt.MouseButton)  # 鼠标按下信号
+    mouse_moved = pyqtSignal(QPoint)  # 鼠标移动信号
+    mouse_released = pyqtSignal(QPoint, Qt.MouseButton)  # 鼠标释放信号
     key_pressed = pyqtSignal(int)  # 键盘按键的键码
     
     def __init__(self, parent=None):
+        """初始化地图画布视图
+        
+        Args:
+            parent: 父窗口部件
+        """
         super().__init__(parent)
         self.setMinimumSize(800, 600)
         
@@ -29,6 +40,12 @@ class MapCanvasView(QWidget):
         self.current_tool = "province"  # 当前工具
         self.brush_size = 20  # 笔刷大小
         self.show_tool_preview = True  # 是否显示工具预览
+        
+        # 临时绘制层 - 用于笔刷操作
+        self.temp_drawing_layer = None  # 临时绘制层
+        self.is_drawing = False  # 是否正在绘制
+        self.drawing_tool = None  # 当前绘制工具
+        self.stroke_path = None  # 当前笔划路径
         
         # 缓存绘制内容
         self.map_cache = None  # 地图缓存
@@ -61,36 +78,346 @@ class MapCanvasView(QWidget):
         self.redraw_timer.timeout.connect(self.delayed_update)
     
     def create_blank_cursor(self):
-        """创建空白光标"""
+        """创建空白光标，用于隐藏鼠标
+        
+        Returns:
+            QCursor: 透明光标对象
+        """
+        # 创建1x1像素的透明光标，完全隐藏鼠标
         pixmap = QPixmap(1, 1)
         pixmap.fill(Qt.transparent)
-        return QCursor(pixmap)
+        return QCursor(pixmap, 0, 0)  # 设置热点为左上角
     
     def set_controller(self, controller):
-        """设置地图控制器"""
+        """设置地图控制器
+        
+        将视图与控制器连接，建立信号和槽的连接关系，
+        使视图能够响应控制器的数据变化。
+        
+        Args:
+            controller: MapController实例
+        """
         self.controller = controller
         # 连接控制器信号
         self.controller.map_changed.connect(self.update_map)
         self.controller.tool_changed.connect(self.on_tool_changed)
     
     def update_map(self):
-        """更新地图（标记需要重绘）"""
+        """更新地图（标记需要重绘）
+        
+        当地图数据变化时，该方法被调用，标记视图需要重绘
+        """
         self.needs_redraw = True
         self.update()
     
     def on_tool_changed(self, tool_name):
-        """工具变更时的处理"""
+        """工具变更时的处理
+        
+        根据选择的工具类型设置相应的光标和工具预览状态
+        
+        Args:
+            tool_name: 工具名称
+        """
         self.current_tool = tool_name
         
         # 根据工具类型设置光标
-        if tool_name in ["province", "height", "river"]:
-            self.setCursor(Qt.CrossCursor)
+        if tool_name in ["province", "height", "continent", "river"]:
+            # 使用空白光标，让工具预览图标充当鼠标
+            self.setCursor(self.blank_cursor)
+            # 确保工具预览显示
+            self.show_tool_preview = True
+            # 立即更新视图，显示工具预览
+            self.update()
         elif tool_name == "plot_select":
             self.setCursor(Qt.ArrowCursor)
+            self.show_tool_preview = False
         elif tool_name == "pan":
             self.setCursor(Qt.OpenHandCursor)
+            self.show_tool_preview = False
         else:
             self.setCursor(Qt.ArrowCursor)
+            self.show_tool_preview = False
+    
+    def start_brush_stroke(self, tool_type, position, size):
+        """开始笔刷绘制，初始化临时绘制层"""
+        from PyQt5.QtGui import QImage, QPainter, QPainterPath, QPen, QBrush, QColor, QRadialGradient
+        from PyQt5.QtCore import Qt, QPointF
+        
+        # 如果已经有绘制层，先清理
+        if self.temp_drawing_layer is not None:
+            self.temp_drawing_layer = None
+        
+        # 获取当前视图大小并创建临时绘制层
+        if self.controller and hasattr(self.controller, 'default_map'):
+            # 使用地图的实际大小
+            height, width = self.controller.default_map.data.shape
+            self.temp_drawing_layer = QImage(width, height, QImage.Format_ARGB32)
+            self.temp_drawing_layer.fill(Qt.transparent)
+            
+            # 创建笔划路径
+            self.stroke_path = QPainterPath()
+            
+            # 转换位置到地图坐标
+            x, y = position.x(), position.y()
+            
+            # 记录初始点
+            self.stroke_path.moveTo(x, y)
+            
+            # 绘制初始点
+            painter = QPainter(self.temp_drawing_layer)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            
+            # 设置笔刷样式（根据工具类型）
+            if tool_type == "continent":
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(255, 255, 255, 150)))
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+            elif tool_type == "height":
+                # 创建径向渐变
+                gradient = QRadialGradient(QPointF(x, y), size/2)
+                gradient.setColorAt(0, QColor(255, 255, 255, 200))
+                gradient.setColorAt(1, QColor(255, 255, 255, 0))
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(gradient))
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+            elif tool_type == "river":
+                painter.setPen(QPen(QColor(70, 130, 180, 200), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.setBrush(Qt.NoBrush)
+                # 对于河流绘制一个起始点
+                painter.drawPoint(QPointF(x, y))
+            else:  # 默认为province工具
+                color = QColor(200, 200, 200, 150)
+                if hasattr(self.controller, 'current_color') and self.controller.current_color:
+                    color = QColor(self.controller.current_color)
+                    color.setAlpha(150)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+            
+            painter.end()
+            
+            # 标记正在绘制状态
+            self.is_drawing = True
+            self.drawing_tool = tool_type
+            
+            # 更新视图
+            self.update()
+            
+            return True
+        
+        return False
+    
+    def continue_brush_stroke(self, position, size):
+        """继续笔刷绘制，更新临时绘制层"""
+        if not self.is_drawing or self.temp_drawing_layer is None:
+            return False
+        
+        from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QRadialGradient
+        from PyQt5.QtCore import Qt, QPointF, QLineF
+        
+        # 转换位置到地图坐标
+        x, y = position.x(), position.y()
+        
+        # 获取上一个点
+        last_point = self.stroke_path.currentPosition()
+        
+        # 添加新点到路径
+        self.stroke_path.lineTo(x, y)
+        
+        # 计算点之间的距离
+        import math
+        distance = math.sqrt((x - last_point.x())**2 + (y - last_point.y())**2)
+        
+        # 绘制到临时层
+        painter = QPainter(self.temp_drawing_layer)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        
+        # 根据工具类型设置笔刷样式
+        if self.drawing_tool == "continent":
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 128)))
+            
+            # 如果距离较大，添加中间点
+            if distance > size/4:
+                steps = max(1, int(distance/(size/8)))
+                for i in range(1, steps+1):
+                    t = i / steps
+                    ix = last_point.x() + (x - last_point.x()) * t
+                    iy = last_point.y() + (y - last_point.y()) * t
+                    painter.drawEllipse(QPointF(ix, iy), size/2, size/2)
+            else:
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+                
+        elif self.drawing_tool == "height":
+            gradient = QRadialGradient(QPointF(x, y), size/2)
+            gradient.setColorAt(0, QColor(255, 255, 255, 200))
+            gradient.setColorAt(1, QColor(255, 255, 255, 0))
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(gradient))
+            
+            # 如果距离较大，添加中间点
+            if distance > size/4:
+                steps = max(1, int(distance/(size/8)))
+                for i in range(1, steps+1):
+                    t = i / steps
+                    ix = last_point.x() + (x - last_point.x()) * t
+                    iy = last_point.y() + (y - last_point.y()) * t
+                    
+                    # 每个中间点使用新的渐变
+                    mid_gradient = QRadialGradient(QPointF(ix, iy), size/2)
+                    mid_gradient.setColorAt(0, QColor(255, 255, 255, 200))
+                    mid_gradient.setColorAt(1, QColor(255, 255, 255, 0))
+                    painter.setBrush(QBrush(mid_gradient))
+                    
+                    painter.drawEllipse(QPointF(ix, iy), size/2, size/2)
+            else:
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+                
+        elif self.drawing_tool == "river":
+            painter.setPen(QPen(QColor(70, 130, 180, 200), 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.setBrush(Qt.NoBrush)
+            
+            # 绘制线段
+            painter.drawLine(QLineF(last_point, QPointF(x, y)))
+            
+        else:  # 默认为province工具
+            color = QColor(200, 200, 200, 128)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(color))
+            
+            # 如果距离较大，添加中间点
+            if distance > size/4:
+                steps = max(1, int(distance/(size/8)))
+                for i in range(1, steps+1):
+                    t = i / steps
+                    ix = last_point.x() + (x - last_point.x()) * t
+                    iy = last_point.y() + (y - last_point.y()) * t
+                    painter.drawEllipse(QPointF(ix, iy), size/2, size/2)
+            else:
+                painter.drawEllipse(QPointF(x, y), size/2, size/2)
+        
+        painter.end()
+        
+        # 更新视图
+        self.update()
+        
+        return True
+    
+    def finish_brush_stroke(self):
+        """完成笔刷绘制，处理数据更新"""
+        if not self.is_drawing or self.temp_drawing_layer is None:
+            return False
+        
+        import numpy as np
+        import cv2
+        from PyQt5.QtGui import QImage
+        
+        # 获取临时层数据
+        temp_image = self.temp_drawing_layer
+        
+        # 转换为OpenCV格式进行处理
+        width = temp_image.width()
+        height = temp_image.height()
+        
+        # 创建NumPy数组存储图像数据
+        buffer = temp_image.constBits()
+        buffer.setsize(temp_image.byteCount())
+        
+        # 将QImage转换为NumPy数组(RGBA格式)
+        img_array = np.frombuffer(buffer, dtype=np.uint8).reshape((height, width, 4))
+        
+        # 根据工具类型处理数据
+        if self.controller is not None:
+            if self.drawing_tool == "continent":
+                # 使用alpha通道创建掩码（非零的alpha表示被笔刷绘制的区域）
+                mask = img_array[:, :, 3] > 0
+                
+                # 确保controller有continent_mask属性
+                if not hasattr(self.controller, 'continent_mask') or self.controller.continent_mask is None:
+                    self.controller.continent_mask = np.zeros((height, width), dtype=bool)
+                
+                # 更新大陆掩码和高程数据
+                self.controller.continent_mask |= mask
+                self.controller.default_map.data[mask] = 255
+                
+            elif self.drawing_tool == "height":
+                # 获取alpha通道作为强度因子
+                strength_factor = img_array[:, :, 3].astype(np.float32) / 255.0
+                
+                # 使用笔刷强度进行加权
+                brush_strength = self.controller.brush_strength
+                height_change = strength_factor * brush_strength
+                
+                # 应用高程变化
+                valid_mask = strength_factor > 0
+                
+                # 更新高程数据
+                current_heights = self.controller.default_map.data
+                new_heights = np.clip(current_heights + height_change, 0, 255)
+                
+                # 只更新掩码内的像素
+                self.controller.default_map.data[valid_mask] = new_heights[valid_mask]
+                
+            elif self.drawing_tool == "river":
+                # 提取笔划路径
+                path_pixels = img_array[:, :, 3] > 0
+                
+                # 使用骨架化算法提取路径中心线
+                path_pixels_u8 = path_pixels.astype(np.uint8) * 255
+                skeleton = cv2.ximgproc.thinning(path_pixels_u8)
+                
+                # 找到非零点
+                river_points = np.column_stack(np.where(skeleton > 0))
+                
+                # 按照路径排序（可选步骤，需要更复杂的算法）
+                # 这里简化为按y坐标排序
+                river_points = river_points[np.argsort(river_points[:, 0])]
+                
+                # 创建河流点列表
+                river_path = [(int(point[1]), int(point[0])) for point in river_points]
+                
+                # 如果没有足够的点，使用原始路径
+                if len(river_path) < 2:
+                    # 回退到简单方法：使用笔划中的任何有效点
+                    all_points = np.column_stack(np.where(path_pixels))
+                    # 采样一些点减少数量
+                    sample_step = max(1, len(all_points) // 20)
+                    sampled_points = all_points[::sample_step]
+                    river_path = [(int(point[1]), int(point[0])) for point in sampled_points]
+                
+                # 添加到河流列表
+                if hasattr(self.controller, 'rivers'):
+                    if len(river_path) > 1:
+                        self.controller.rivers.append(river_path)
+                        self.controller.is_drawing = False
+                
+            elif self.drawing_tool == "province":
+                # 提取被笔刷覆盖的点
+                province_pixels = img_array[:, :, 3] > 0
+                
+                # 找到所有非零点
+                province_points = np.column_stack(np.where(province_pixels))
+                
+                # 添加点到当前省份
+                if hasattr(self.controller, 'current_province') and self.controller.current_province is not None:
+                    for point in province_points:
+                        # 注意坐标系转换：NumPy是(y,x)，而省份点是(x,y)
+                        self.controller.current_province.add_point(int(point[1]), int(point[0]))
+            
+            # 发送地图更改信号
+            self.controller.map_changed.emit()
+        
+        # 清理绘制状态
+        self.is_drawing = False
+        self.drawing_tool = None
+        self.stroke_path = None
+        self.temp_drawing_layer = None
+        
+        # 更新视图
+        self.needs_redraw = True
+        self.update()
+        
+        return True
     
     def paintEvent(self, event):
         """绘制地图"""
@@ -128,6 +455,10 @@ class MapCanvasView(QWidget):
             
             # 绘制河流
             self.draw_rivers(painter)
+            
+            # 绘制临时笔刷层
+            if self.is_drawing and self.temp_drawing_layer is not None:
+                painter.drawImage(0, 0, self.temp_drawing_layer)
         else:
             # 如果有缓存的省份图像，仍然绘制它们（不需要重新计算路径）
             if hasattr(self, 'provinces_cache'):
@@ -136,8 +467,8 @@ class MapCanvasView(QWidget):
                 painter.translate(self.offset_x, self.offset_y)
                 painter.scale(self.scale_factor, self.scale_factor)
         
-        # 绘制当前工具的预览 (总是实时绘制)
-        if self.show_tool_preview and not self.is_dragging_view:
+        # 绘制当前工具的预览 (只有当未在绘制状态时才显示)
+        if self.show_tool_preview and not self.is_dragging_view and not self.is_drawing:
             self.draw_tool_preview(painter)
         
         # 性能监控
@@ -189,7 +520,7 @@ class MapCanvasView(QWidget):
                 # 将缓冲区数据复制到QImage
                 for y in range(height):
                     for x in range(width):
-                        self.heightmap_image.setPixel(x, y, img_buffer[y, x])
+                        self.heightmap_image.setPixel(x, y, int(img_buffer[y, x]))
                 
                 self.needs_redraw = False
             except Exception as e:
@@ -386,7 +717,7 @@ class MapCanvasView(QWidget):
         map_y = (cursor_pos.y() - self.offset_y) / self.scale_factor
         
         # 根据当前工具绘制预览
-        if self.current_tool in ["province", "height", "continent"]:
+        if self.current_tool in ["province", "height", "continent", "river"]:
             # 绘制笔刷圆圈
             brush_size = self.controller.brush_size if hasattr(self.controller, 'brush_size') else 20
             
@@ -397,13 +728,24 @@ class MapCanvasView(QWidget):
                 painter.setPen(brush_pen)
                 painter.setBrush(Qt.NoBrush)
             else:
-                brush_pen = QPen(QColor(200, 200, 200, 180))
-                brush_pen.setWidth(2)
-                painter.setPen(brush_pen)
+                if self.current_tool == "province":
+                    brush_color = QColor(200, 200, 200, 120)
+                    brush_pen = QPen(QColor(150, 150, 150, 180), 1)
+                elif self.current_tool == "height":
+                    brush_color = QColor(100, 255, 100, 120)
+                    brush_pen = QPen(QColor(80, 200, 80, 180), 1)
+                elif self.current_tool == "continent":
+                    brush_color = QColor(255, 255, 255, 120)
+                    brush_pen = QPen(QColor(200, 200, 200, 180), 1)
+                elif self.current_tool == "river":
+                    brush_color = QColor(100, 150, 255, 120)
+                    brush_pen = QPen(QColor(70, 130, 180, 180), 1)
+                else:
+                    brush_color = QColor(230, 230, 250, 50)
+                    brush_pen = QPen(QColor(200, 200, 200, 180), 1)
                 
-                # 半透明填充
-                brush_fill = QColor(230, 230, 250, 50)
-                painter.setBrush(QBrush(brush_fill))
+                painter.setPen(brush_pen)
+                painter.setBrush(QBrush(brush_color))
             
             # 确保将浮点坐标转换为整数
             x = int(map_x - brush_size/2)
@@ -411,8 +753,19 @@ class MapCanvasView(QWidget):
             width = int(brush_size)
             height = int(brush_size)
             
+            # 绘制笔刷预览
             painter.drawEllipse(x, y, width, height)
-    
+            
+            # 绘制中心点以提高精确度
+            if not self.optimized_drawing:
+                center_pen = QPen(QColor(255, 255, 255, 200), 1, Qt.SolidLine)
+                painter.setPen(center_pen)
+                painter.drawPoint(int(map_x), int(map_y))
+                
+                # 绘制十字线
+                painter.drawLine(int(map_x-3), int(map_y), int(map_x+3), int(map_y))
+                painter.drawLine(int(map_x), int(map_y-3), int(map_x), int(map_y+3))
+        
     def mousePressEvent(self, event):
         """鼠标按下事件处理"""
         # 转换为相对于缩放和平移后的坐标
@@ -426,6 +779,18 @@ class MapCanvasView(QWidget):
             # 开启性能优化模式
             self.optimized_drawing = True
             return
+        
+        # 如果按下左键，开始笔刷操作
+        if event.button() == Qt.LeftButton and not self.is_drawing:
+            # 获取当前工具和笔刷大小
+            tool = self.current_tool
+            brush_size = self.controller.brush_size if hasattr(self.controller, 'brush_size') else 20
+            
+            # 检查工具类型，开始相应的笔刷操作
+            if tool in ["continent", "height", "river", "province"]:
+                # 开始笔刷绘制
+                self.start_brush_stroke(tool, map_pos, brush_size)
+                return
         
         # 将事件转发给控制器
         self.mouse_pressed.emit(map_pos, event.button())
@@ -446,6 +811,25 @@ class MapCanvasView(QWidget):
         # 转换为相对于缩放和平移后的坐标
         map_pos = self.map_to_scene(event.pos())
         
+        # 如果正在绘制，继续笔刷操作
+        if self.is_drawing and (event.buttons() & Qt.LeftButton):
+            brush_size = self.controller.brush_size if hasattr(self.controller, 'brush_size') else 20
+            self.continue_brush_stroke(map_pos, brush_size)
+            return
+        
+        # 如果显示工具预览，需要立即更新视图以显示笔刷在新位置
+        if self.show_tool_preview and self.current_tool in ["province", "height", "continent", "river"]:
+            # 仅更新鼠标周围的区域以提高性能
+            brush_size = self.controller.brush_size if hasattr(self.controller, 'brush_size') else 20
+            # 计算屏幕坐标中的区域
+            screen_x = int(event.pos().x())
+            screen_y = int(event.pos().y())
+            screen_radius = int(brush_size * self.scale_factor) + 10  # 添加边距
+            # 更新区域
+            update_rect = QRect(screen_x - screen_radius, screen_y - screen_radius,
+                               screen_radius * 2, screen_radius * 2)
+            self.update(update_rect)
+        
         # 将事件转发给控制器
         self.mouse_moved.emit(map_pos)
     
@@ -459,6 +843,11 @@ class MapCanvasView(QWidget):
             self.optimized_drawing = False
             self.needs_redraw = True
             self.update()
+            return
+        
+        # 如果是结束笔刷操作
+        if event.button() == Qt.LeftButton and self.is_drawing:
+            self.finish_brush_stroke()
             return
         
         # 转换为相对于缩放和平移后的坐标
