@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                            QGroupBox, QTabWidget, QWidget, QListWidget, QListWidgetItem,
-                           QKeySequenceEdit, QGridLayout, QMessageBox)
+                           QKeySequenceEdit, QGridLayout, QMessageBox, QSpinBox, QCheckBox)
 from PyQt5.QtCore import Qt, QSettings, pyqtSignal
 from PyQt5.QtGui import QKeySequence
 
@@ -58,11 +58,22 @@ class SettingsDialog(QDialog):
             "新建": QKeySequence("Ctrl+N"),
             "导出": QKeySequence("Ctrl+E"),
             "退出": QKeySequence("Alt+F4"),
+            "性能监控": QKeySequence("Ctrl+P"),
+        }
+        
+        # 默认设置
+        self.default_settings = {
+            "GridSize": 50,  # 默认栅格精度为50
+            "EnablePerformanceMonitor": True,  # 默认启用性能监控
         }
         
         # 加载当前快捷键设置
         self.current_shortcuts = {}
         self.load_shortcuts()
+        
+        # 加载当前栅格设置
+        self.current_settings = {}
+        self.load_settings()
         
         # 初始化UI
         self.init_ui()
@@ -78,9 +89,13 @@ class SettingsDialog(QDialog):
         shortcuts_tab = self.create_shortcuts_tab()
         tab_widget.addTab(shortcuts_tab, "快捷键")
         
-        # 将来可添加其他设置页
-        # display_tab = self.create_display_tab()
-        # tab_widget.addTab(display_tab, "显示")
+        # 创建地图设置页
+        map_tab = self.create_map_tab()
+        tab_widget.addTab(map_tab, "地图")
+        
+        # 创建性能设置页
+        view_tab = self.create_view_tab()
+        tab_widget.addTab(view_tab, "界面")
         
         main_layout.addWidget(tab_widget)
         
@@ -129,6 +144,63 @@ class SettingsDialog(QDialog):
         
         return widget
     
+    def create_map_tab(self):
+        """创建地图设置页"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # 栅格设置组
+        grid_group = QGroupBox("栅格设置")
+        grid_layout = QGridLayout()
+        
+        # 栅格精度设置
+        grid_size_label = QLabel("栅格精度:")
+        self.grid_size_spin = QSpinBox()
+        self.grid_size_spin.setRange(1, 500)  # 设置精度范围
+        self.grid_size_spin.setValue(self.current_settings["GridSize"])
+        self.grid_size_spin.setSingleStep(5)
+        self.grid_size_spin.valueChanged.connect(self.on_grid_size_changed)
+        
+        grid_size_help = QLabel("较小的值会生成更多更细的地块，较大的值会生成更少更粗的地块")
+        grid_size_help.setWordWrap(True)
+        
+        grid_layout.addWidget(grid_size_label, 0, 0)
+        grid_layout.addWidget(self.grid_size_spin, 0, 1)
+        grid_layout.addWidget(grid_size_help, 1, 0, 1, 2)
+        
+        grid_group.setLayout(grid_layout)
+        layout.addWidget(grid_group)
+        
+        # 添加一些填充空间
+        layout.addStretch()
+        
+        return widget
+    
+    def create_view_tab(self):
+        """创建界面设置页"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # 性能监控设置组
+        perf_group = QGroupBox("性能监控")
+        perf_layout = QVBoxLayout()
+        
+        # 启用性能监控选项
+        self.enable_perf_checkbox = QCheckBox("启用性能监控")
+        self.enable_perf_checkbox.setChecked(self.current_settings.get("EnablePerformanceMonitor", self.default_settings["EnablePerformanceMonitor"]))
+        self.enable_perf_checkbox.toggled.connect(self.on_perf_monitor_toggled)
+        
+        perf_layout.addWidget(self.enable_perf_checkbox)
+
+        
+        perf_group.setLayout(perf_layout)
+        layout.addWidget(perf_group)
+        
+        # 添加一些填充空间
+        layout.addStretch()
+        
+        return widget
+    
     def on_shortcut_changed(self, action_name, shortcut):
         """快捷键变更事件处理"""
         # 检查快捷键冲突
@@ -148,6 +220,14 @@ class SettingsDialog(QDialog):
         # 更新当前快捷键
         self.current_shortcuts[action_name] = shortcut
     
+    def on_grid_size_changed(self, value):
+        """栅格精度变更处理"""
+        self.current_settings["GridSize"] = value
+    
+    def on_perf_monitor_toggled(self, checked):
+        """性能监控启用状态变更处理"""
+        self.current_settings["EnablePerformanceMonitor"] = checked
+    
     def load_shortcuts(self):
         """从设置加载快捷键配置"""
         self.settings.beginGroup("Shortcuts")
@@ -159,12 +239,48 @@ class SettingsDialog(QDialog):
         
         self.settings.endGroup()
     
+    def load_settings(self):
+        """加载其他设置"""
+        self.settings.beginGroup("MapSettings")
+        
+        # 加载栅格精度设置
+        self.current_settings["GridSize"] = int(self.settings.value("GridSize", self.default_settings["GridSize"]))
+        
+        self.settings.endGroup()
+        
+        self.settings.beginGroup("Performance")
+        
+        # 加载性能监控设置
+        self.current_settings["EnablePerformanceMonitor"] = self.settings.value(
+            "EnablePerformanceMonitor", 
+            self.default_settings["EnablePerformanceMonitor"],
+            type=bool
+        )
+        
+        self.settings.endGroup()
+    
     def save_shortcuts(self):
         """保存快捷键配置到设置"""
         self.settings.beginGroup("Shortcuts")
         
         for action_name, shortcut in self.current_shortcuts.items():
             self.settings.setValue(action_name, shortcut.toString())
+        
+        self.settings.endGroup()
+    
+    def save_settings(self):
+        """保存其他设置"""
+        self.settings.beginGroup("MapSettings")
+        
+        # 保存栅格精度设置
+        self.settings.setValue("GridSize", self.current_settings["GridSize"])
+        
+        self.settings.endGroup()
+        
+        self.settings.beginGroup("Performance")
+        
+        # 保存性能监控设置
+        self.settings.setValue("EnablePerformanceMonitor", self.current_settings["EnablePerformanceMonitor"])
         
         self.settings.endGroup()
         self.settings.sync()
@@ -176,15 +292,45 @@ class SettingsDialog(QDialog):
             self.current_shortcuts[action_name] = default_shortcut
             if action_name in self.shortcut_items:
                 self.shortcut_items[action_name].shortcut_edit.setKeySequence(default_shortcut)
+        
+        # 重置栅格设置
+        self.current_settings["GridSize"] = self.default_settings["GridSize"]
+        self.grid_size_spin.setValue(self.default_settings["GridSize"])
+        
+        # 重置性能监控设置
+        self.current_settings["EnablePerformanceMonitor"] = self.default_settings["EnablePerformanceMonitor"]
+        self.enable_perf_checkbox.setChecked(self.default_settings["EnablePerformanceMonitor"])
     
     def accept(self):
         """保存设置并关闭对话框"""
         self.save_shortcuts()
+        self.save_settings()
         self.settings_changed.emit()
         super().accept()
     
     def get_shortcut(self, action_name):
-        """获取指定操作的快捷键"""
-        if action_name in self.current_shortcuts:
-            return self.current_shortcuts[action_name]
-        return QKeySequence() 
+        """获取指定操作的快捷键
+        
+        Args:
+            action_name: 操作名称
+        
+        Returns:
+            QKeySequence: 快捷键序列
+        """
+        return self.current_shortcuts.get(action_name, QKeySequence())
+    
+    def get_grid_size(self):
+        """获取栅格精度设置
+        
+        Returns:
+            int: 栅格精度
+        """
+        return self.current_settings.get("GridSize", self.default_settings["GridSize"])
+    
+    def is_performance_monitor_enabled(self):
+        """获取性能监控启用状态
+        
+        Returns:
+            bool: 是否启用性能监控
+        """
+        return self.current_settings.get("EnablePerformanceMonitor", self.default_settings["EnablePerformanceMonitor"]) 

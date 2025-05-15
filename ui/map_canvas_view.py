@@ -5,6 +5,8 @@ from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QImage, QCursor, QPixmap
 from PyQt5.QtCore import Qt, QRect, pyqtSignal, QPoint, QTimer
 import time
 
+from tools.performance.performance_monitor import StaticMonitor
+
 class MapCanvasView(QWidget):
     """地图画布视图组件，专注于地图的绘制和基本交互
     
@@ -420,11 +422,16 @@ class MapCanvasView(QWidget):
         return True
     
     def paintEvent(self, event):
-        """绘制地图"""
-        # 性能监控
-        start_time = time.time()
+        """绘制事件处理
         
-        # 开始绘制
+        绘制地图内容、工具预览等
+        
+        Args:
+            event: 绘制事件
+        """
+
+        
+        # 创建绘制器
         painter = QPainter(self)
         
         # 优化性能：缩放和拖拽时禁用抗锯齿和高质量渲染
@@ -471,9 +478,36 @@ class MapCanvasView(QWidget):
         if self.show_tool_preview and not self.is_dragging_view and not self.is_drawing:
             self.draw_tool_preview(painter)
         
-        # 性能监控
-        self.draw_time = time.time() - start_time
+        # 绘制可绘制区域的黑框边界
+        if hasattr(self.controller, 'default_map') and self.controller.default_map:
+            # 保存当前状态
+            painter.save()
+            # 重置变换，确保按原始尺寸绘制边框
+            painter.resetTransform()
+            # 将坐标系移动到画布左上角
+            painter.translate(self.offset_x, self.offset_y)
+            # 应用缩放
+            painter.scale(self.scale_factor, self.scale_factor)
+            
+            # 获取地图尺寸
+            width = self.controller.default_map.width
+            height = self.controller.default_map.height
+            
+            # 设置黑色画笔绘制边框
+            painter.setPen(QPen(QColor(0, 0, 0), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(0, 0, width, height)
+            
+            # 恢复之前的画笔状态
+            painter.restore()
         
+        # 结束绘制
+        painter.end()
+        self.needs_redraw = False
+
+        StaticMonitor.update_frame()
+        
+    @StaticMonitor.monitor("绘制高程图")
     def draw_heightmap(self, painter):
         """绘制高程图 - 使用缓存提高性能"""
         if not hasattr(self.controller, 'default_map') or not self.controller.default_map:
@@ -521,8 +555,6 @@ class MapCanvasView(QWidget):
                 for y in range(height):
                     for x in range(width):
                         self.heightmap_image.setPixel(x, y, int(img_buffer[y, x]))
-                
-                self.needs_redraw = False
             except Exception as e:
                 print(f"绘制高程图错误: {e}")
                 return
@@ -536,6 +568,7 @@ class MapCanvasView(QWidget):
             
             painter.drawImage(0, 0, self.heightmap_image)
     
+    @StaticMonitor.monitor("绘制省份")
     def draw_provinces(self, painter):
         """绘制省份"""
         if not hasattr(self.controller, 'provinces'):
@@ -620,6 +653,7 @@ class MapCanvasView(QWidget):
             # 绘制路径
             painter.drawPath(path)
     
+    @StaticMonitor.monitor("绘制大陆地块")
     def draw_land_plots(self, painter):
         """绘制大陆地块"""
         if not hasattr(self.controller, 'land_plots') or not self.controller.land_plots:
@@ -627,37 +661,32 @@ class MapCanvasView(QWidget):
         
         # 检查是否需要更新地块缓存
         if self.needs_redraw or not hasattr(self, 'land_plots_cache'):
-            # 创建缓存图像
-            self.land_plots_cache = QImage(self.width(), self.height(), QImage.Format_ARGB32)
+            # 创建缓存图像 - 使用地图实际尺寸
+            if hasattr(self.controller, 'default_map') and self.controller.default_map:
+                cache_width = self.controller.default_map.width
+                cache_height = self.controller.default_map.height
+            else:
+                print("绘制网格时，无法找到 default_map")
+                return
+
+            
+            # 创建与地图相同尺寸的缓存
+            self.land_plots_cache = QImage(cache_width, cache_height, QImage.Format_ARGB32)
             self.land_plots_cache.fill(Qt.transparent)
             
             # 创建缓存图像的绘制器
             cache_painter = QPainter(self.land_plots_cache)
             cache_painter.setRenderHint(QPainter.Antialiasing)
             
-            # 应用与主绘制器相同的变换
-            cache_painter.translate(self.offset_x, self.offset_y)
-            cache_painter.scale(self.scale_factor, self.scale_factor)
-            
             # 设置地块样式
             plot_pen = QPen(QColor(100, 100, 100, 100), 1)
             plot_brush = QBrush(QColor(200, 200, 100, 50))
             selected_brush = QBrush(QColor(255, 200, 50, 100))
             
-            # 只绘制范围内的地块，避免不必要的绘制
-            view_rect = self.mapToScene(self.rect()).boundingRect()
-            
-            # 提前准备好QPainterPath对象，避免重复创建
+            # 绘制所有地块
             for i, plot in enumerate(self.controller.land_plots):
                 if not plot or not hasattr(plot, 'exterior'):
                     continue
-                
-                # 检查地块是否在可见区域内（简单的边界框检查）
-                if hasattr(plot, 'bounds'):
-                    bounds = plot.bounds
-                    if bounds[2] < view_rect.left() or bounds[0] > view_rect.right() or \
-                       bounds[3] < view_rect.top() or bounds[1] > view_rect.bottom():
-                        continue
                 
                 # 创建地块路径
                 path = QPainterPath()
@@ -693,16 +722,11 @@ class MapCanvasView(QWidget):
             
             cache_painter.end()
         
-        # 绘制缓存的地块图像
-        if hasattr(self, 'land_plots_cache'):
-            painter.resetTransform()
+        # 绘制缓存的地块图像 - 使用已有的画布变换
+        if self.land_plots_cache:
+            # 直接使用当前painter的变换状态（已经包含scale和translate）
             painter.drawImage(0, 0, self.land_plots_cache)
-            
-            # 恢复变换
-            painter.resetTransform()
-            painter.translate(self.offset_x, self.offset_y)
-            painter.scale(self.scale_factor, self.scale_factor)
-    
+
     def draw_tool_preview(self, painter):
         """绘制当前工具的预览"""
         # 获取鼠标位置

@@ -4,13 +4,15 @@ from PyQt5.QtWidgets import (QMainWindow, QDockWidget, QVBoxLayout, QHBoxLayout,
                             QFileDialog, QMessageBox, QColorDialog, QPushButton,
                             QApplication, QProgressDialog, QSlider)
 from PyQt5.QtGui import QIcon, QColor, QMouseEvent, QKeySequence
-from PyQt5.QtCore import Qt, QPoint, QTimer, QSize
+from PyQt5.QtCore import Qt, QPoint, QTimer, QSize, QSettings
 
 from ui.map_canvas_view import MapCanvasView
 from ui.tools_panel import ToolsPanel
 from ui.controllers.map_controller import MapController
 from ui.styles.modern_style import apply_modern_style, apply_light_style
 from ui.settings_dialog import SettingsDialog
+from tools.performance import PerformanceWidget
+from tools.performance.performance_monitor import StaticMonitor
 
 class MainWindow(QMainWindow):
     """地图编辑器主窗口"""
@@ -34,7 +36,14 @@ class MainWindow(QMainWindow):
         self.resize_timer.setInterval(100)  # 100ms防抖间隔
         self.resize_timer.timeout.connect(self.on_resize_timeout)
         
+        # 性能监控组件
+        self.performance_dock = None
+        
+        # 初始化UI
         self.init_ui()
+        
+        # 加载设置
+        self.load_settings()
         
     def apply_style(self):
         """应用UI样式"""
@@ -99,10 +108,10 @@ class MainWindow(QMainWindow):
         self.map_controller.selection_changed.connect(self.on_selection_changed)
         
         # 工具面板信号
-        self.tool_panel.tool_activated.connect(self.on_tool_activated)
-        self.tool_panel.province_operation.connect(self.on_province_operation)
-        self.tool_panel.terrain_operation.connect(self.on_terrain_operation)
-        self.tool_panel.texture_operation.connect(self.on_texture_operation)
+        self.tools_panel.tool_activated.connect(self.on_tool_activated)
+        self.tools_panel.province_operation.connect(self.on_province_operation)
+        self.tools_panel.terrain_operation.connect(self.on_terrain_operation)
+        self.tools_panel.texture_operation.connect(self.on_texture_operation)
         
         # 地图画布信号
         self.map_canvas.mouse_pressed.connect(self.on_map_mouse_pressed)
@@ -285,6 +294,12 @@ class MainWindow(QMainWindow):
         redo_action.triggered.connect(self.redo)
         edit_menu.addAction(redo_action)
         
+        edit_menu.addSeparator()
+        
+        settings_action = QAction("设置", self)
+        settings_action.triggered.connect(self.show_settings)
+        edit_menu.addAction(settings_action)
+        
         # 视图菜单
         view_menu = menu_bar.addMenu("视图")
         
@@ -292,6 +307,8 @@ class MainWindow(QMainWindow):
         theme_action.triggered.connect(self.toggle_theme)
         view_menu.addAction(theme_action)
         
+
+
         # 设置菜单
         settings_menu = menu_bar.addMenu("设置")
         
@@ -305,6 +322,8 @@ class MainWindow(QMainWindow):
         generate_land_action = QAction("生成自然地块", self)
         generate_land_action.triggered.connect(self.generate_land_plots)
         tools_menu.addAction(generate_land_action)
+
+
         
         # 帮助菜单
         help_menu = menu_bar.addMenu("帮助")
@@ -386,38 +405,51 @@ class MainWindow(QMainWindow):
     
     def create_docks(self, parent_window):
         """创建停靠窗口"""
-        # 创建统一工具面板
-        self.tool_panel = ToolsPanel(parent_window)
-        parent_window.addDockWidget(Qt.LeftDockWidgetArea, self.tool_panel)
+        # 工具面板
+        self.tools_panel = ToolsPanel("工具", parent_window)
+        self.tools_panel.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.tools_panel.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        
+        
+        
+        # 创建性能监控停靠窗口
+        self.performance_dock = PerformanceWidget("性能监控", parent_window)
+        self.performance_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
+        self.performance_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        
+        # 添加性能监控菜单项
+        self.toggle_perf_action = QAction("性能监控", self)
+        self.toggle_perf_action.setCheckable(True)
+        self.toggle_perf_action.setChecked(True)
+        self.toggle_perf_action.triggered.connect(self.toggle_performance_monitor)
+        self.performance_dock.addAction(self.toggle_perf_action)
+
+        self.performance_dock.setVisible(False)
+
+        parent_window.addDockWidget(Qt.LeftDockWidgetArea, self.performance_dock)
+
+        parent_window.addDockWidget(Qt.LeftDockWidgetArea, self.tools_panel)
+        
     
     def generate_land_plots(self):
         """生成自然地块"""
-        # 创建进度对话框
-        progress = QProgressDialog("正在生成地块...", "取消", 0, 100, self)
-        progress.setWindowTitle("生成地块")
-        progress.setModal(True)
-        progress.show()
-        QApplication.processEvents()  # 更新界面
-        
         try:
-            # 调用控制器的地块生成方法
-            progress.setValue(20)
-            QApplication.processEvents()
+            # 从设置中获取栅格精度
+            settings = QSettings("MapEditor", "Settings")
+            settings.beginGroup("MapSettings")
+            grid_size = int(settings.value("GridSize", 50))  # 默认值为50
+            settings.endGroup()
             
-            success = self.map_controller.generate_land_plots(plot_cell_size=50)
-            
-            progress.setValue(100)
-            QApplication.processEvents()
+            # 调用控制器的地块生成方法，传入栅格精度参数
+            success = self.map_controller.generate_land_plots(plot_cell_size=grid_size)
             
             if success:
-                self.status_bar.showMessage("已生成地块")
+                self.status_bar.showMessage(f"已生成地块（栅格精度: {grid_size}）")
             else:
                 QMessageBox.warning(self, "警告", "生成地块失败，请检查高程图数据")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"生成地块时出错: {str(e)}")
-        finally:
-            progress.close()
-            
+    
     def new_map(self):
         """创建新地图"""
         reply = QMessageBox.question(self, "确认", "创建新地图会丢失当前未保存的更改。是否继续？",
@@ -468,16 +500,14 @@ class MainWindow(QMainWindow):
     
     def show_about(self):
         """显示关于对话框"""
-        QMessageBox.about(self, "关于地图编辑器", 
-                          "PyQt5地图编辑器 v1.0\n\n"
-                          "服务于游戏的地图编辑工具，提供以下功能：\n"
-                          "• 省份创建和编辑\n"
-                          "• 地形高程绘制\n"
-                          "• 河流绘制\n"
-                          "• 自动地块生成\n"
-                          "• 地图导入导出\n\n"
-                          "采用MVC设计模式，模块化架构，支持深色/浅色主题切换。\n\n"
-                          )
+        QMessageBox.about(
+            self,
+            "关于地图编辑器",
+            "PyQt5地图编辑器\n\n"
+            "一个用于创建和编辑地图的工具，支持省份、地形、河流等编辑功能。\n\n"
+            "版本: 1.0\n"
+            "作者: 地图编辑器开发团队"
+        )
     
     def export_map_data(self):
         """导出地图数据"""
@@ -539,10 +569,10 @@ class MainWindow(QMainWindow):
     
     def show_settings(self):
         """显示设置对话框"""
-        dialog = SettingsDialog(self)
-        dialog.settings_changed.connect(self.apply_settings)
+        settings_dialog = SettingsDialog(self)
+        settings_dialog.settings_changed.connect(self.apply_settings)
         
-        if dialog.exec_():
+        if settings_dialog.exec_():
             self.apply_settings()
     
     def apply_settings(self):
@@ -550,10 +580,11 @@ class MainWindow(QMainWindow):
         # 重新加载快捷键设置
         self.load_shortcuts()
         
+        # 应用性能监控设置
+        self.update_performance_monitor()
+    
     def load_shortcuts(self):
         """从设置加载快捷键配置"""
-        from PyQt5.QtCore import QSettings
-        
         settings = QSettings("MapEditor", "Settings")
         settings.beginGroup("Shortcuts")
         
@@ -573,20 +604,15 @@ class MainWindow(QMainWindow):
             self.map_controller.set_color(color)
     
     def resizeEvent(self, event):
-        """窗口大小变化事件处理"""
-        # 启动防抖定时器
+        """窗口大小变更事件处理"""
+        super().resizeEvent(event)
+
         if self.resize_timer.isActive():
             self.resize_timer.stop()
         
-        # 设置优化绘制模式
-        if hasattr(self, 'map_canvas') and self.map_canvas:
-            self.map_canvas.optimized_drawing = True
-        
-        # 使用200ms防抖间隔
-        self.resize_timer.setInterval(200)
+        # 使用定时器防抖，避免频繁重绘
         self.resize_timer.start()
-        
-        super().resizeEvent(event)
+
     
     def on_resize_timeout(self):
         """窗口尺寸调整结束后的处理"""
@@ -600,3 +626,57 @@ class MainWindow(QMainWindow):
                 delattr(self.map_canvas, 'provinces_cache')
                 
             self.map_canvas.update()
+    
+    def toggle_performance_monitor(self, checked=None):
+        """切换性能监控显示状态
+        
+        Args:
+            checked: 是否选中，如果为None则切换当前状态
+        """
+        if checked is None:
+            checked = not self.toggle_perf_action.isChecked()
+            self.toggle_perf_action.setChecked(checked)
+        
+        # 更新设置
+        settings = QSettings("MapEditor", "Settings")
+        settings.setValue("Performance/EnablePerformanceMonitor", checked)
+        
+        # 更新性能监控窗口
+        self.update_performance_monitor()
+    
+    def update_performance_monitor(self):
+        """根据设置更新性能监控窗口状态"""
+        settings = QSettings("MapEditor", "Settings")
+        enabled = settings.value("Performance/EnablePerformanceMonitor", True, type=bool)
+        
+        # 更新菜单项状态
+        self.toggle_perf_action.setChecked(enabled)
+        
+        if enabled:
+            # 如果启用且窗口不存在，创建窗口
+            if not self.performance_dock:
+                self.performance_dock = PerformanceWidget(self)
+                self.performance_dock.closed.connect(lambda: self.toggle_performance_monitor(False))
+            
+            # 显示窗口
+            self.performance_dock.setVisible(True)
+        else:
+            # 如果禁用且窗口存在，隐藏窗口
+            if self.performance_dock:
+                self.performance_dock.setVisible(False)
+
+    def load_settings(self):
+        """加载应用程序设置"""
+        # 加载快捷键
+        self.load_shortcuts()
+        
+        # 加载性能监控设置并应用
+        self.update_performance_monitor()
+    
+    def closeEvent(self, event):
+        """窗口关闭事件处理"""
+        # 在这里可以添加关闭前的确认对话框
+        if QMessageBox.question(self, "确认", "确定要退出应用程序吗？") == QMessageBox.Yes:
+            event.accept()
+        else:
+            event.ignore()

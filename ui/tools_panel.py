@@ -15,8 +15,8 @@ class ToolsPanel(QDockWidget):
     terrain_operation = pyqtSignal(str)  # 地形操作
     texture_operation = pyqtSignal(str)  # 纹理操作
     
-    def __init__(self, parent=None):
-        super().__init__("工具箱", parent)
+    def __init__(self, name, parent=None):
+        super().__init__(name, parent)
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
         

@@ -289,7 +289,15 @@ class MapController(QObject):
         self.map_changed.emit()
     
     def select_plots_in_brush(self, pos, is_adding=True):
-        """在笔刷范围内选择地块"""
+        """在笔刷范围内选择地块
+        
+        Args:
+            pos: 鼠标位置（QPoint）
+            is_adding: 是否为添加模式（True）或删除模式（False）
+            
+        Returns:
+            bool: 是否有地块被选中或取消选中
+        """
         if not self.land_plots:
             return False
         
@@ -299,40 +307,66 @@ class MapController(QObject):
         # 计算笔刷半径
         radius = self.brush_size / 2
         
-        # 遍历所有地块
-        for i, plot in enumerate(self.land_plots):
-            if plot and hasattr(plot, 'contains') and plot.contains(sg.Point(x, y)) or \
-               plot and hasattr(plot, 'centroid') and plot.centroid.buffer(radius).contains(sg.Point(x, y)):
-                # 添加到选择列表（如果是添加模式）
-                if is_adding and i not in self.land_plots_selected:
-                    self.land_plots_selected.append(i)
-                    changed = True
-                # 从选择列表移除（如果是移除模式）
-                elif not is_adding and i in self.land_plots_selected:
-                    self.land_plots_selected.remove(i)
-                    changed = True
+        # 确保land_plots_selected是列表类型
+        if not hasattr(self, 'land_plots_selected') or self.land_plots_selected is None:
+            self.land_plots_selected = []
+            
+        # 创建一个点对象用于包含检查
+        try:
+            point = sg.Point(x, y)
+            point_buffer = point.buffer(radius)  # 以笔刷半径创建一个圆形缓冲区
+            
+            # 遍历所有地块
+            for i, plot in enumerate(self.land_plots):
+                if not plot or not hasattr(plot, 'is_valid') or not plot.is_valid:
+                    continue
+                    
+                # 检查地块是否与笔刷相交
+                if plot.intersects(point_buffer):
+                    # 添加到选择列表（如果是添加模式）
+                    if is_adding and i not in self.land_plots_selected:
+                        self.land_plots_selected.append(i)
+                        changed = True
+                    # 从选择列表移除（如果是移除模式）
+                    elif not is_adding and i in self.land_plots_selected:
+                        self.land_plots_selected.remove(i)
+                        changed = True
+        except Exception as e:
+            print(f"选择地块时出错: {str(e)}")
+            return False
         
         if changed:
+            # 标记需要重绘
             self.map_changed.emit()
-        
+            
         return changed
     
     def finalize_province_from_plots(self):
-        """从选定的地块创建省份"""
+        """从选定的地块创建省份
+        
+        返回:
+            bool: 省份创建是否成功
+        """
+        # 确保有一个当前省份和选定的地块
         if not self.current_province or not self.land_plots_selected:
             return False
         
-        # 收集选定地块
-        selected_plots = [self.land_plots[i] for i in self.land_plots_selected if i < len(self.land_plots)]
+        # 将索引转换为实际地块对象，确保索引有效
+        selected_plots = []
+        for i in self.land_plots_selected:
+            if 0 <= i < len(self.land_plots) and self.land_plots[i] is not None:
+                selected_plots.append(self.land_plots[i])
+        
         if not selected_plots:
             return False
         
-        # 合并地块为一个多边形
         try:
             from shapely.ops import unary_union
+            # 尝试合并所有选定的地块
             union = unary_union(selected_plots)
             
             if union.is_empty:
+                print("无法创建省份：合并后的几何体为空")
                 return False
             
             # 更新省份信息
@@ -342,9 +376,36 @@ class MapController(QObject):
             # 提取外部边界作为点集
             if hasattr(union, 'exterior') and union.exterior:
                 self.current_province.points = list(union.exterior.coords)
+            elif hasattr(union, 'geoms') and len(union.geoms) > 0:
+                # 如果是MultiPolygon，使用最大面积的多边形的外部边界
+                max_area = 0
+                largest_poly = None
+                
+                for poly in union.geoms:
+                    if poly.area > max_area:
+                        max_area = poly.area
+                        largest_poly = poly
+                
+                if largest_poly and hasattr(largest_poly, 'exterior') and largest_poly.exterior:
+                    self.current_province.points = list(largest_poly.exterior.coords)
+                else:
+                    print("无法创建省份：无法从MultiPolygon提取有效边界")
+                    return False
+            else:
+                print("无法创建省份：几何体类型不支持")
+                return False
             
-            # 清空路径缓存
+            # 确保创建了有效的点集
+            if not self.current_province.points or len(self.current_province.points) < 3:
+                print("无法创建省份：不能提取有效边界")
+                return False
+            
+            # 清空路径缓存，强制重建
             self.current_province._cached_path = None
+            # 确保省份形状完成
+            if not self.current_province.finalize_shape():
+                print("无法创建省份：形状无法完成")
+                return False
             
             # 将省份添加到列表
             if self.current_province not in self.provinces:
@@ -359,7 +420,9 @@ class MapController(QObject):
             
             return True
         except Exception as e:
-            print(f"创建省份失败: {e}")
+            print(f"创建省份失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def save_map(self, file_path):
@@ -634,18 +697,19 @@ class MapController(QObject):
             return False
         
         try:
-            # 从高程图生成地块
-            print("正在生成地块...")
+            # 使用LandDivider工具生成地块
+            from tools.land_divider import LandDivider
             
-            # 通过高程阈值过滤出陆地部分
-            land_mask = self.default_map.data > 0
+            # 创建LandDivider实例
+            land_divider = LandDivider()
             
             # 生成地块
-            plot_geometries = self._generate_plots_from_mask(land_mask, plot_cell_size)
+            print("正在生成地块...")
+            plot_geometries = land_divider.generate_land_plots(self.default_map, plot_cell_size)
             
             # 设置地块
             self.land_plots = plot_geometries
-            self.land_plots_selected = set()  # 清空选择
+            self.land_plots_selected = []  # 清空选择，确保是列表类型
             
             # 通知视图更新
             self.map_changed.emit()
@@ -656,75 +720,4 @@ class MapController(QObject):
             print(f"生成地块时出错: {str(e)}")
             import traceback
             traceback.print_exc()
-            return False
-    
-    def _generate_plots_from_mask(self, land_mask, plot_cell_size=50):
-        """从二值掩码生成地块
-        
-        Args:
-            land_mask: 二值掩码，True表示陆地
-            plot_cell_size: 地块大小
-            
-        Returns:
-            list: 地块几何对象列表
-        """
-        import shapely.geometry as sg
-        from shapely.ops import unary_union
-        import cv2
-        
-        # 转换为OpenCV可处理的格式
-        land_mask_cv = land_mask.astype(np.uint8) * 255
-        
-        if np.sum(land_mask_cv) == 0:  # 如果没有陆地
-            return []
-        
-        # 使用OpenCV找到陆地区域
-        contours, _ = cv2.findContours(land_mask_cv, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if not contours:
-            return []
-        
-        # 创建陆地多边形
-        land_polygons = []
-        for contour in contours:
-            if len(contour) >= 3:
-                # 将OpenCV轮廓转换为Shapely多边形
-                points = [(point[0][0], point[0][1]) for point in contour]
-                if len(points) >= 3:
-                    polygon = sg.Polygon(points)
-                    if polygon.is_valid:
-                        land_polygons.append(polygon)
-        
-        # 如果没有有效的陆地多边形，返回空列表
-        if not land_polygons:
-            return []
-        
-        # 合并所有陆地多边形
-        land_geometry = unary_union(land_polygons)
-        if not land_geometry.is_valid:
-            land_geometry = land_geometry.buffer(0)  # 尝试修复几何无效性
-        
-        # 将区域划分为网格
-        minx, miny, maxx, maxy = land_geometry.bounds
-        
-        grid_polygons = []
-        
-        # 生成网格多边形
-        for x in range(int(minx), int(maxx), plot_cell_size):
-            for y in range(int(miny), int(maxy), plot_cell_size):
-                # 创建一个矩形单元格
-                cell = sg.box(x, y, x + plot_cell_size, y + plot_cell_size)
-                # 与陆地相交
-                intersection = cell.intersection(land_geometry)
-                if not intersection.is_empty and intersection.area > 0:
-                    if intersection.geom_type == 'MultiPolygon':
-                        # 如果是多个多边形，添加每个部分
-                        for geom in intersection.geoms:
-                            if geom.is_valid and geom.area > 0:
-                                grid_polygons.append(geom)
-                    else:
-                        # 单个多边形
-                        if intersection.is_valid and intersection.area > 0:
-                            grid_polygons.append(intersection)
-        
-        return grid_polygons 
+            return False 

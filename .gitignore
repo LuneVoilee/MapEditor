@@ -4,3 +4,4 @@ _Reference
 ai对话.txt
 .pylintrc
 *.pyc
+.cursor
