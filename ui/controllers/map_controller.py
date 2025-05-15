@@ -711,6 +711,9 @@ class MapController(QObject):
             self.land_plots = plot_geometries
             self.land_plots_selected = []  # 清空选择，确保是列表类型
             
+            # 自动切换到地块选择工具
+            self.set_tool("plot_select")
+            
             # 通知视图更新
             self.map_changed.emit()
             

@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import QWidget, QApplication
 from PyQt5.QtGui import QPainter, QPen, QBrush, QColor, QImage, QCursor, QPixmap, QPainterPath
 from PyQt5.QtCore import Qt, QRect, pyqtSignal, QPoint, QTimer
 import time
-
+import typing
 from tools.performance.performance_monitor import StaticMonitor
 
 class MapCanvasView(QWidget):
@@ -51,9 +51,12 @@ class MapCanvasView(QWidget):
         
         # 缓存绘制内容
         self.map_cache = None  # 地图缓存
-        self.heightmap_image = None  # 高程图缓存
+        self.default_map_image = None  # 高程图缓存
         self.needs_redraw = True  # 是否需要重新绘制
         self.fast_update = False  # 是否使用快速更新模式
+        
+        # 缓存版本跟踪
+        self.land_plots_version = -1  # 地块版本号，用于检测变化
         
         # 交互设置
         self.setMouseTracking(True)  # 启用鼠标跟踪
@@ -71,7 +74,7 @@ class MapCanvasView(QWidget):
         self.optimized_drawing = False  # 优化绘制标志
         
         # 性能监控
-        self.draw_time = 0.0  # 绘制时间
+        self.draw_time = 0.0
         
         # 重绘定时器 - 防止频繁重绘
         self.redraw_timer = QTimer(self)
@@ -103,14 +106,23 @@ class MapCanvasView(QWidget):
         # 连接控制器信号
         self.controller.map_changed.connect(self.update_map)
         self.controller.tool_changed.connect(self.on_tool_changed)
-    
+
+    def update(self,*args):
+        StaticMonitor.update_frame()
+        super().update(*args)
+
     def update_map(self):
         """更新地图（标记需要重绘）
         
         当地图数据变化时，该方法被调用，标记视图需要重绘
         """
         self.needs_redraw = True
+        # 强制更新地块缓存版本号，确保重绘时更新
+        if hasattr(self, 'controller') and hasattr(self.controller, 'land_plots'):
+            self.land_plots_version = -1  # 重置版本号以强制更新缓存
+            
         self.update()
+
     
     def on_tool_changed(self, tool_name):
         """工具变更时的处理
@@ -450,13 +462,13 @@ class MapCanvasView(QWidget):
         painter.scale(self.scale_factor, self.scale_factor)
         
         # 绘制高程图
-        self.draw_heightmap(painter)
+        self.draw_default_map(painter)
+        
+        # 绘制栅格化地块 - 始终绘制，不受优化模式影响
+        self.draw_land_plots(painter)
         
         # 在拖动或调整大小时使用简化绘制
         if not self.is_dragging_view and not self.optimized_drawing:
-            # 绘制大陆地块 (可以考虑缓存)
-            self.draw_land_plots(painter)
-            
             # 绘制省份
             self.draw_provinces(painter)
             
@@ -505,30 +517,29 @@ class MapCanvasView(QWidget):
         painter.end()
         self.needs_redraw = False
 
-        StaticMonitor.update_frame()
         
-    @StaticMonitor.monitor("绘制高程图")
-    def draw_heightmap(self, painter):
-        """绘制高程图 - 使用缓存提高性能"""
+    @StaticMonitor.monitor("绘制底图")
+    def draw_default_map(self, painter):
+        """绘制底图"""
         if not hasattr(self.controller, 'default_map') or not self.controller.default_map:
             return
         
         # 获取高程图数据
-        heightmap = self.controller.default_map
+        default_map = self.controller.default_map
         
         # 检查是否已创建缓存图像或者需要更新
-        if not self.heightmap_image or self.needs_redraw:
+        if not self.default_map_image or self.needs_redraw:
             # 创建高程图缓存
             try:
-                width = min(heightmap.width, 2000)  # 限制最大尺寸，防止内存溢出
-                height = min(heightmap.height, 2000)
+                width = min(default_map.width, 2000)  # 限制最大尺寸，防止内存溢出
+                height = min(default_map.height, 2000)
                 
                 # 使用更高效的方式创建图像
-                self.heightmap_image = QImage(width, height, QImage.Format_RGB32)
+                self.default_map_image = QImage(width, height, QImage.Format_RGB32)
                 
                 # 使用NumPy批量处理像素，避免逐个像素设置
                 # 获取高程数据
-                elevation_data = heightmap.data
+                elevation_data = default_map.data
                 
                 # 预先定义颜色映射
                 color_map = {
@@ -554,19 +565,19 @@ class MapCanvasView(QWidget):
                 # 将缓冲区数据复制到QImage
                 for y in range(height):
                     for x in range(width):
-                        self.heightmap_image.setPixel(x, y, int(img_buffer[y, x]))
+                        self.default_map_image.setPixel(x, y, int(img_buffer[y, x]))
             except Exception as e:
                 print(f"绘制高程图错误: {e}")
                 return
         
         # 使用缓存的高程图绘制
-        if self.heightmap_image:
+        if self.default_map_image:
             # 使用更高效的方式绘制，避免缩放和变换导致的抗锯齿计算
             if self.optimized_drawing:
                 painter.setRenderHint(QPainter.Antialiasing, False)
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
             
-            painter.drawImage(0, 0, self.heightmap_image)
+            painter.drawImage(0, 0, self.default_map_image)
     
     @StaticMonitor.monitor("绘制省份")
     def draw_provinces(self, painter):
@@ -653,14 +664,26 @@ class MapCanvasView(QWidget):
             # 绘制路径
             painter.drawPath(path)
     
-    @StaticMonitor.monitor("绘制大陆地块")
+    @StaticMonitor.monitor("绘制栅格化地块")
     def draw_land_plots(self, painter):
-        """绘制大陆地块"""
+        """绘制栅格化地块"""
         if not hasattr(self.controller, 'land_plots') or not self.controller.land_plots:
             return
         
-        # 检查是否需要更新地块缓存
-        if self.needs_redraw or not hasattr(self, 'land_plots_cache'):
+        # 计算当前land_plots的版本号或标识
+        current_plots_length = len(self.controller.land_plots)
+        current_plots_selected = [] if not hasattr(self.controller, 'land_plots_selected') else self.controller.land_plots_selected.copy()
+        
+        # 检查是否需要更新地块缓存 - 增加检查land_plots变化的逻辑
+        if (self.needs_redraw or 
+            not hasattr(self, 'land_plots_cache') or 
+            self.land_plots_version != current_plots_length or
+            hasattr(self, 'last_plots_selected') and self.last_plots_selected != current_plots_selected):
+            
+            # 更新版本号或标识
+            self.land_plots_version = current_plots_length
+            self.last_plots_selected = current_plots_selected.copy()
+            
             # 创建缓存图像 - 使用地图实际尺寸
             if hasattr(self.controller, 'default_map') and self.controller.default_map:
                 cache_width = self.controller.default_map.width
@@ -810,9 +833,14 @@ class MapCanvasView(QWidget):
             tool = self.current_tool
             brush_size = self.controller.brush_size if hasattr(self.controller, 'brush_size') else 20
             
-            # 检查工具类型，开始相应的笔刷操作
-            if tool in ["continent", "height", "river", "province"]:
+            # 检查当前是否处于地块选择模式
+            in_plot_selection_mode = hasattr(self.controller, 'land_plots') and len(self.controller.land_plots) > 0
+            
+            # 检查工具类型，开始相应的笔刷操作，但当处于地块选择模式时禁用绘制工具
+            if tool in ["continent", "height", "river", "province"] and not in_plot_selection_mode:
                 # 开始笔刷绘制
+                # 确保鼠标真正隐藏
+                self.setCursor(self.blank_cursor)
                 self.start_brush_stroke(tool, map_pos, brush_size)
                 return
         
@@ -1027,7 +1055,7 @@ class MapCanvasView(QWidget):
             delattr(self, 'rivers_cache')
         
         # 清除高程图缓存
-        self.heightmap_image = None
+        self.default_map_image = None
         
         # 延长防抖动重绘间隔到300ms，进一步减少频繁重绘
         self.redraw_timer.setInterval(300)
