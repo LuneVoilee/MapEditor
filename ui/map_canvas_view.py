@@ -107,7 +107,7 @@ class MapCanvasView(QWidget):
         self.controller.map_changed.connect(self.update_map)
         self.controller.tool_changed.connect(self.on_tool_changed)
 
-    def update(self,*args):
+    def update(self, *args):
         StaticMonitor.update_frame()
         super().update(*args)
 
@@ -433,6 +433,7 @@ class MapCanvasView(QWidget):
         
         return True
     
+    @StaticMonitor.monitor("绘制事件")
     def paintEvent(self, event):
         """绘制事件处理
         
@@ -461,11 +462,12 @@ class MapCanvasView(QWidget):
         painter.translate(self.offset_x, self.offset_y)
         painter.scale(self.scale_factor, self.scale_factor)
         
-        # 绘制高程图
+        # 绘制底图
         self.draw_default_map(painter)
         
-        # 绘制栅格化地块 - 始终绘制，不受优化模式影响
-        self.draw_land_plots(painter)
+        # 绘制栅格化地块
+        if hasattr(self.controller, 'show_grid') and self.controller.show_grid:
+            self.draw_land_plots(painter)
         
         # 在拖动或调整大小时使用简化绘制
         if not self.is_dragging_view and not self.optimized_drawing:
@@ -486,8 +488,8 @@ class MapCanvasView(QWidget):
                 painter.translate(self.offset_x, self.offset_y)
                 painter.scale(self.scale_factor, self.scale_factor)
         
-        # 绘制当前工具的预览 (只有当未在绘制状态时才显示)
-        if self.show_tool_preview and not self.is_dragging_view and not self.is_drawing:
+        # 绘制当前工具的预览 (修改为允许在绘制时也显示)
+        if self.show_tool_preview and not self.is_dragging_view:
             self.draw_tool_preview(painter)
         
         # 绘制可绘制区域的黑框边界
@@ -581,62 +583,7 @@ class MapCanvasView(QWidget):
     
     @StaticMonitor.monitor("绘制省份")
     def draw_provinces(self, painter):
-        """绘制省份"""
-        if not hasattr(self.controller, 'provinces'):
-            return
-        
-        # 检查是否需要更新省份缓存图像
-        if self.needs_redraw or not hasattr(self, 'provinces_cache'):
-            # 根据当前视图大小创建缓存图像
-            self.provinces_cache = QImage(self.width(), self.height(), QImage.Format_ARGB32)
-            self.provinces_cache.fill(Qt.transparent)
-            
-            # 创建缓存图像的绘制器
-            cache_painter = QPainter(self.provinces_cache)
-            cache_painter.setRenderHint(QPainter.Antialiasing)
-            
-            # 应用与主绘制器相同的变换
-            cache_painter.translate(self.offset_x, self.offset_y)
-            cache_painter.scale(self.scale_factor, self.scale_factor)
-            
-            # 绘制所有省份到缓存图像
-            for province in self.controller.provinces:
-                if hasattr(province, 'path') and province.path:
-                    cache_painter.fillPath(province.path, province.color)
-                    
-                    # 绘制边框
-                    border_pen = QPen(QColor(0, 0, 0), 1)
-                    cache_painter.setPen(border_pen)
-                    cache_painter.drawPath(province.path)
-            
-            cache_painter.end()
-            
-            # 标记为已缓存
-            self.provinces_cached = True
-        
-        # 如果有选中的省份，我们需要在实时绘制中处理它
-        selected_province = None if not hasattr(self.controller, 'selected_province') else self.controller.selected_province
-        
-        # 绘制缓存的省份图像
-        if hasattr(self, 'provinces_cache'):
-            painter.resetTransform()  # 重置变换以便准确绘制缓存图像
-            painter.drawImage(0, 0, self.provinces_cache)
-            
-            # 恢复变换以便绘制选中的省份
-            painter.resetTransform()
-            painter.translate(self.offset_x, self.offset_y)
-            painter.scale(self.scale_factor, self.scale_factor)
-        
-        # 绘制当前选中的省份（高亮）- 这需要实时绘制
-        if selected_province and hasattr(selected_province, 'path') and selected_province.path:
-            # 使用半透明高亮色
-            highlight_color = QColor(255, 255, 0, 100)
-            painter.fillPath(selected_province.path, highlight_color)
-            
-            # 绘制粗边框
-            highlight_pen = QPen(QColor(255, 200, 0), 2)
-            painter.setPen(highlight_pen)
-            painter.drawPath(selected_province.path)
+        pass
     
     def draw_rivers(self, painter):
         """绘制河流"""
@@ -750,6 +697,7 @@ class MapCanvasView(QWidget):
             # 直接使用当前painter的变换状态（已经包含scale和translate）
             painter.drawImage(0, 0, self.land_plots_cache)
 
+    @StaticMonitor.monitor("绘制当前工具的预览")
     def draw_tool_preview(self, painter):
         """绘制当前工具的预览"""
         # 获取鼠标位置
@@ -812,7 +760,8 @@ class MapCanvasView(QWidget):
                 # 绘制十字线
                 painter.drawLine(int(map_x-3), int(map_y), int(map_x+3), int(map_y))
                 painter.drawLine(int(map_x), int(map_y-3), int(map_x), int(map_y+3))
-        
+
+    @StaticMonitor.monitor("鼠标按下事件")
     def mousePressEvent(self, event):
         """鼠标按下事件处理"""
         # 转换为相对于缩放和平移后的坐标
@@ -890,7 +839,13 @@ class MapCanvasView(QWidget):
         # 如果是结束拖拽视图
         if event.button() == Qt.MiddleButton and self.is_dragging_view:
             self.is_dragging_view = False
-            self.setCursor(Qt.ArrowCursor)
+            
+            # 检查当前工具是否是绘制工具类型，如果是则恢复空白光标
+            if self.current_tool in ["province", "height", "continent", "river"]:
+                self.setCursor(self.blank_cursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+                
             # 关闭性能优化模式，完整绘制
             self.optimized_drawing = False
             self.needs_redraw = True
@@ -908,6 +863,7 @@ class MapCanvasView(QWidget):
         # 将事件转发给控制器
         self.mouse_released.emit(map_pos, event.button())
     
+    @StaticMonitor.monitor("鼠标按下事件")
     def keyPressEvent(self, event):
         """键盘按下事件处理"""
         # 将事件转发给控制器
@@ -926,6 +882,7 @@ class MapCanvasView(QWidget):
             # 缩小
             self.zoom_out()
     
+    @StaticMonitor.monitor("键盘释放事件")
     def keyReleaseEvent(self, event):
         """键盘释放事件处理"""
         if event.key() == Qt.Key_Space and hasattr(self, 'previous_tool'):
@@ -933,6 +890,7 @@ class MapCanvasView(QWidget):
             self.current_tool = self.previous_tool
             self.on_tool_changed(self.current_tool)
     
+    @StaticMonitor.monitor("鼠标滚轮事件")
     def wheelEvent(self, event):
         """鼠标滚轮事件处理（缩放）"""
         zoom_in_factor = 1.1  # 降低缩放步长，减少卡顿

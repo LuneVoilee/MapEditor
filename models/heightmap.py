@@ -2,8 +2,8 @@
 import numpy as np
 from scipy import ndimage
 
-class HeightMap:
-    """高程图类，用于存储和管理地形高程数据"""
+class DefaultMap:
+    """底图类，用于绘制地图"""
     
     def __init__(self, width, height):
         self.width = width

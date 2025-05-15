@@ -33,9 +33,6 @@ class PerformanceWidget(QDockWidget):
         
         # 连接性能监控器信号
         StaticMonitor.data_updated.connect(self._update_metrics)
-        
-        # 设置快捷键
-        self._setup_shortcuts()
     
     def _init_ui(self):
         """初始化UI组件"""
@@ -92,11 +89,7 @@ class PerformanceWidget(QDockWidget):
 
         self.setWidget(content_widget)
     
-    def _setup_shortcuts(self):
-        """设置快捷键"""
-        # Ctrl+P 切换显示/隐藏
-        self.toggle_shortcut = QShortcut(QKeySequence("Ctrl+P"), self.parent())
-        self.toggle_shortcut.activated.connect(self.toggle_visibility)
+
     
     def toggle_visibility(self):
         """切换窗口显示/隐藏状态"""

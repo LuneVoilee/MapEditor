@@ -9,7 +9,7 @@ from shapely.geometry import mapping, shape
 import cv2
 
 from models.province import Province
-from models.heightmap import HeightMap
+from models.heightmap import DefaultMap
 from models.texture import Texture
 from ui.history.history_manager import HistoryManager
 from ui.history.map_state import MapState
@@ -43,7 +43,7 @@ class MapController(QObject):
         self.continent_mask = None  # 大陆掩码
         
         # 初始化高程图
-        self.default_map = HeightMap(800, 600)
+        self.default_map = DefaultMap(800, 600)
         
         # 工具状态
         self.current_tool = "province"  # 当前工具
@@ -58,6 +58,9 @@ class MapController(QObject):
         # 文件操作
         self.current_file_path = None  # 当前文件路径
         
+        # 显示网格设置
+        self.show_grid = True  # 默认显示网格
+
         # 历史记录管理
         self.history_manager = HistoryManager(max_history=50)
         self.add_to_history()  # 保存初始状态
@@ -280,7 +283,7 @@ class MapController(QObject):
         self.rivers = []
         self.land_plots = []
         self.land_plots_selected = []
-        self.default_map = HeightMap(800, 600)
+        self.default_map = DefaultMap(800, 600)
         
         self.selected_province = None
         self.current_province = None
@@ -499,7 +502,7 @@ class MapController(QObject):
             if 'heightmap' in data and data['heightmap'] is not None:
                 height_data = np.array(data['heightmap'])
                 if self.default_map is None:
-                    self.default_map = HeightMap(height_data.shape[1], height_data.shape[0])
+                    self.default_map = DefaultMap(height_data.shape[1], height_data.shape[0])
                 self.default_map.data = height_data
             
             # 加载河流数据
@@ -636,7 +639,7 @@ class MapController(QObject):
                     height_data = np.array(heightmap_data['data'])
                     width = heightmap_data.get('width', height_data.shape[1])
                     height = heightmap_data.get('height', height_data.shape[0])
-                    self.default_map = HeightMap(width, height)
+                    self.default_map = DefaultMap(width, height)
                     self.default_map.data = height_data
             
             # 导入河流数据
@@ -693,7 +696,7 @@ class MapController(QObject):
     def generate_land_plots(self, plot_cell_size=50):
         """生成陆地地块"""
         if not self.default_map:
-            print("错误: 无法生成地块，未设置高程图")
+            print("错误: 无法生成地块，未设置底图")
             return False
         
         try:
@@ -724,3 +727,13 @@ class MapController(QObject):
             import traceback
             traceback.print_exc()
             return False 
+        
+    def set_show_grid(self, show):
+        """设置是否显示网格
+        
+        Args:
+            show: 是否显示网格
+        """
+        if self.show_grid != show:
+            self.show_grid = show
+            self.map_changed.emit()

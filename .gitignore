@@ -5,3 +5,4 @@ ai对话.txt
 .pylintrc
 *.pyc
 .cursor
+performance_log.txt

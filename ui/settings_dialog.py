@@ -164,9 +164,15 @@ class SettingsDialog(QDialog):
         grid_size_help = QLabel("较小的值会生成更多更细的地块，较大的值会生成更少更粗的地块")
         grid_size_help.setWordWrap(True)
         
+        # 添加显示网格选项
+        self.show_grid_checkbox = QCheckBox("显示网格")
+        self.show_grid_checkbox.setChecked(self.current_settings.get("ShowGrid", True))
+        self.show_grid_checkbox.toggled.connect(self.on_show_grid_toggled)
+        
         grid_layout.addWidget(grid_size_label, 0, 0)
         grid_layout.addWidget(self.grid_size_spin, 0, 1)
         grid_layout.addWidget(grid_size_help, 1, 0, 1, 2)
+        grid_layout.addWidget(self.show_grid_checkbox, 2, 0, 1, 2)
         
         grid_group.setLayout(grid_layout)
         layout.addWidget(grid_group)
@@ -228,6 +234,10 @@ class SettingsDialog(QDialog):
         """性能监控启用状态变更处理"""
         self.current_settings["EnablePerformanceMonitor"] = checked
     
+    def on_show_grid_toggled(self, checked):
+        """网格显示状态变更处理"""
+        self.current_settings["ShowGrid"] = checked
+    
     def load_shortcuts(self):
         """从设置加载快捷键配置"""
         self.settings.beginGroup("Shortcuts")
@@ -245,6 +255,9 @@ class SettingsDialog(QDialog):
         
         # 加载栅格精度设置
         self.current_settings["GridSize"] = int(self.settings.value("GridSize", self.default_settings["GridSize"]))
+        
+        # 加载显示网格设置
+        self.current_settings["ShowGrid"] = self.settings.value("ShowGrid", "true") == "true"
         
         self.settings.endGroup()
         
@@ -275,6 +288,9 @@ class SettingsDialog(QDialog):
         # 保存栅格精度设置
         self.settings.setValue("GridSize", self.current_settings["GridSize"])
         
+        # 保存显示网格设置
+        self.settings.setValue("ShowGrid", str(self.current_settings["ShowGrid"]).lower())
+        
         self.settings.endGroup()
         
         self.settings.beginGroup("Performance")
@@ -300,6 +316,10 @@ class SettingsDialog(QDialog):
         # 重置性能监控设置
         self.current_settings["EnablePerformanceMonitor"] = self.default_settings["EnablePerformanceMonitor"]
         self.enable_perf_checkbox.setChecked(self.default_settings["EnablePerformanceMonitor"])
+        
+        # 重置显示网格设置
+        self.current_settings["ShowGrid"] = self.default_settings["ShowGrid"]
+        self.show_grid_checkbox.setChecked(self.default_settings["ShowGrid"])
     
     def accept(self):
         """保存设置并关闭对话框"""
@@ -333,4 +353,8 @@ class SettingsDialog(QDialog):
         Returns:
             bool: 是否启用性能监控
         """
-        return self.current_settings.get("EnablePerformanceMonitor", self.default_settings["EnablePerformanceMonitor"]) 
+        return self.current_settings.get("EnablePerformanceMonitor", self.default_settings["EnablePerformanceMonitor"])
+    
+    def is_show_grid_enabled(self):
+        """返回是否显示网格"""
+        return self.current_settings.get("ShowGrid", True) 

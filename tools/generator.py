@@ -100,45 +100,6 @@ class TerrainGenerator:
         return rivers
 
 
-class ProvinceGenerator:
-    """省份生成器，用于生成省份结构"""
-    
-    @staticmethod
-    def generate_provinces(width, height, count=10):
-        """生成省份，使用泰森多边形算法"""
-        # 在实际应用中，这里应该实现更复杂的算法
-        # 这里只使用简单的随机点生成示例
-        
-        provinces = []
-        centers = []
-        
-        # 生成随机中心点
-        for _ in range(count):
-            x = np.random.randint(width // 10, width * 9 // 10)
-            y = np.random.randint(height // 10, height * 9 // 10)
-            centers.append((x, y))
-            
-            # 生成随机颜色
-            h = np.random.randint(0, 360)
-            s = np.random.randint(150, 250)
-            v = np.random.randint(150, 250)
-            color = QColor.fromHsv(h, s, v)
-            
-            # 创建省份
-            province = {"center": (x, y), "color": color, "points": []}
-            provinces.append(province)
-        
-        # 为每个像素分配最近的省份
-        for y in range(height):
-            for x in range(width):
-                distances = [(i, np.sqrt((x - cx) ** 2 + (y - cy) ** 2)) 
-                             for i, (cx, cy) in enumerate(centers)]
-                nearest = min(distances, key=lambda d: d[1])[0]
-                provinces[nearest]["points"].append((x, y))
-                
-        return provinces
-
-
 class TextureGenerator:
     """纹理生成器，用于生成地形纹理"""
     

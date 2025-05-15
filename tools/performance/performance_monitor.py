@@ -50,7 +50,17 @@ class PerformanceMonitor(QObject):
             
             # 发送更新信号
             self.data_updated.emit(self.get_metrics())
-    
+
+        if self._metrics['fps'] < 10:
+            with open('performance_log.txt', 'a') as f:
+                f.write("-"*100 + "\n")
+
+                f.write(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}\n")
+                f.write(f"FPS: {self._metrics['fps']}, Frame Time: {self._metrics['frame_time']}\n")
+                f.write(f"Custom Metrics: {self._metrics['custom_metrics']}\n")
+                
+                f.write("-"*100 + "\n")
+
     def start_timer(self, name):
         """开始一个命名计时器
         

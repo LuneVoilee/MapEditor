@@ -79,8 +79,8 @@ class ToolsPanel(QDockWidget):
             }
             QTreeWidget::item {
                 padding: 6px 4px;
-                margin: 2px 0px;
-                border-radius: 4px;
+                margin: 0px;
+                border-radius: 0px;
             }
             QTreeWidget::item:selected {
                 background-color: #3a7ebf;
@@ -228,8 +228,8 @@ class FontSizeAdjuster(QObject):
             }}
             QTreeWidget::item {{
                 padding: 6px 4px;
-                margin: 2px 0px;
-                border-radius: 4px;
+                margin: 0px;
+                border-radius: 0px;
             }}
             QTreeWidget::item:selected {{
                 background-color: #3a7ebf;

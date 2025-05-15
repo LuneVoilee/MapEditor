@@ -10,7 +10,7 @@ from ui.map_canvas_view import MapCanvasView
 from ui.tools_panel import ToolsPanel
 from ui.controllers.map_controller import MapController
 from ui.styles.modern_style import apply_modern_style, apply_light_style
-from ui.settings_dialog import SettingsDialog
+from settings import AppSettings, SettingsDialog
 from tools.performance import PerformanceWidget
 from tools.performance.performance_monitor import StaticMonitor
 
@@ -25,6 +25,9 @@ class MainWindow(QMainWindow):
         
         # 鼠标状态跟踪
         self._is_left_button_pressed = False
+        
+        # 初始化设置管理器
+        self.app_settings = AppSettings()
         
         # 应用现代样式
         self.is_dark_mode = True
@@ -70,6 +73,9 @@ class MainWindow(QMainWindow):
         
         # 创建地图控制器
         self.map_controller = MapController(self)
+        
+        # 设置地图控制器到设置管理器
+        self.app_settings.set_map_controller(self.map_controller)
         
         # 创建内容容器（包含菜单、工具栏和地图画布）
         content_container = QMainWindow()
@@ -315,16 +321,8 @@ class MainWindow(QMainWindow):
         preferences_action = QAction("偏好设置", self)
         preferences_action.triggered.connect(self.show_settings)
         settings_menu.addAction(preferences_action)
-        
-        # 工具菜单
-        tools_menu = menu_bar.addMenu("工具")
-        
-        generate_land_action = QAction("生成自然地块", self)
-        generate_land_action.triggered.connect(self.generate_land_plots)
-        tools_menu.addAction(generate_land_action)
 
 
-        
         # 帮助菜单
         help_menu = menu_bar.addMenu("帮助")
         
@@ -435,10 +433,7 @@ class MainWindow(QMainWindow):
         """生成自然地块"""
         try:
             # 从设置中获取栅格精度
-            settings = QSettings("MapEditor", "Settings")
-            settings.beginGroup("MapSettings")
-            grid_size = int(settings.value("GridSize", 50))  # 默认值为50
-            settings.endGroup()
+            grid_size = self.app_settings.get('MapSettings/GridSize')
             
             # 调用控制器的地块生成方法，传入栅格精度参数
             success = self.map_controller.generate_land_plots(plot_cell_size=grid_size)
@@ -541,35 +536,82 @@ class MainWindow(QMainWindow):
     
     def create_shortcuts(self):
         """创建键盘快捷键"""
-        # 撤销动作
-        self.undo_action = QAction("撤销", self)
-        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
-        self.undo_action.triggered.connect(self.undo)
-        self.addAction(self.undo_action)
         
-        # 重做动作
-        self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Y"))
-        self.redo_action.triggered.connect(self.redo)
-        self.addAction(self.redo_action)
+        # 撤销快捷键
+        undo_action = QAction("撤销", self)
+        undo_action.triggered.connect(self.undo)
+        self.app_settings.bind_shortcut(undo_action, 'Shortcuts/Undo')
+        self.addAction(undo_action)
+        
+        # 重做快捷键
+        redo_action = QAction("重做", self)
+        redo_action.triggered.connect(self.redo)
+        self.app_settings.bind_shortcut(redo_action, 'Shortcuts/Redo')
+        self.addAction(redo_action)
+        
+        # 显示/隐藏网格快捷键
+        show_grid_action = QAction("显示网格", self)
+        show_grid_action.setCheckable(True)
+        show_grid_action.setChecked(self.app_settings.get('MapSettings/ShowGrid'))
+        show_grid_action.triggered.connect(self.toggle_grid)
+        self.app_settings.bind_shortcut(show_grid_action, 'Shortcuts/ShowGrid')
+        self.addAction(show_grid_action)
+        
+        # 显示/隐藏性能监控快捷键
+        self.toggle_perf_action = QAction("显示/隐藏性能监控", self)
+        self.toggle_perf_action.setCheckable(True)
+        self.toggle_perf_action.setChecked(self.app_settings.get('Performance/EnablePerformanceMonitor'))
+        self.toggle_perf_action.triggered.connect(self.toggle_performance_monitor)
+        self.app_settings.bind_shortcut(self.toggle_perf_action, 'Shortcuts/TogglePerformanceMonitor')
+        self.addAction(self.toggle_perf_action)
+        
+        # 监听设置变更信号
+        self.app_settings.settings_changed.connect(self.on_setting_changed)
     
-    def undo(self):
-        """执行撤销操作"""
-        if self.map_controller.undo():
-            self.status_bar.showMessage("已撤销")
-        else:
-            self.status_bar.showMessage("无法撤销")
+    def on_setting_changed(self, key):
+        """处理设置变更事件"""
+        # 网格显示
+        if key == 'MapSettings/ShowGrid':
+            grid_visible = self.app_settings.get(key)
+            self.map_controller.set_show_grid(grid_visible)
+        
+        # 性能监控
+        elif key == 'Performance/EnablePerformanceMonitor':
+            self.update_performance_monitor()
     
-    def redo(self):
-        """执行重做操作"""
-        if self.map_controller.redo():
-            self.status_bar.showMessage("已重做")
+    def toggle_grid(self):
+        """切换网格显示状态"""
+        current = self.app_settings.get('MapSettings/ShowGrid')
+        self.app_settings.set('MapSettings/ShowGrid', not current)
+    
+    def toggle_performance_monitor(self):
+        """切换性能监控显示状态"""
+        current = self.app_settings.get('Performance/EnablePerformanceMonitor')
+        self.app_settings.set('Performance/EnablePerformanceMonitor', not current)
+    
+    def update_performance_monitor(self):
+        """根据设置更新性能监控窗口状态"""
+        enabled = self.app_settings.get('Performance/EnablePerformanceMonitor')
+        
+        # 更新菜单项状态
+        self.toggle_perf_action.setChecked(enabled)
+        
+        if enabled:
+            # 如果启用且窗口不存在，创建窗口
+            if not self.performance_dock:
+                self.performance_dock = PerformanceWidget("性能监控", self)
+                self.performance_dock.closed.connect(lambda: self.toggle_performance_monitor())
+            
+            # 显示窗口
+            self.performance_dock.setVisible(True)
         else:
-            self.status_bar.showMessage("无法重做")
+            # 如果禁用且窗口存在，隐藏窗口
+            if self.performance_dock:
+                self.performance_dock.setVisible(False)
     
     def show_settings(self):
         """显示设置对话框"""
-        settings_dialog = SettingsDialog(self)
+        settings_dialog = SettingsDialog(self, self.app_settings)
         settings_dialog.settings_changed.connect(self.apply_settings)
         
         if settings_dialog.exec_():
@@ -577,22 +619,11 @@ class MainWindow(QMainWindow):
     
     def apply_settings(self):
         """应用设置"""
-        # 重新加载快捷键设置
-        self.load_shortcuts()
+        # 应用所有设置
+        self.app_settings.apply_all()
         
-        # 应用性能监控设置
+        # 更新性能监控状态
         self.update_performance_monitor()
-    
-    def load_shortcuts(self):
-        """从设置加载快捷键配置"""
-        settings = QSettings("MapEditor", "Settings")
-        settings.beginGroup("Shortcuts")
-        
-        # 更新撤销/重做快捷键
-        self.undo_action.setShortcut(settings.value("撤销", "Ctrl+Z"))
-        self.redo_action.setShortcut(settings.value("重做", "Ctrl+Y"))
-        
-        settings.endGroup()
     
     def choose_color(self):
         """选择颜色"""
@@ -626,49 +657,12 @@ class MainWindow(QMainWindow):
                 delattr(self.map_canvas, 'provinces_cache')
                 
             self.map_canvas.update()
-    
-    def toggle_performance_monitor(self, checked=None):
-        """切换性能监控显示状态
-        
-        Args:
-            checked: 是否选中，如果为None则切换当前状态
-        """
-        if checked is None:
-            checked = not self.toggle_perf_action.isChecked()
-            self.toggle_perf_action.setChecked(checked)
-        
-        # 更新设置
-        settings = QSettings("MapEditor", "Settings")
-        settings.setValue("Performance/EnablePerformanceMonitor", checked)
-        
-        # 更新性能监控窗口
-        self.update_performance_monitor()
-    
-    def update_performance_monitor(self):
-        """根据设置更新性能监控窗口状态"""
-        settings = QSettings("MapEditor", "Settings")
-        enabled = settings.value("Performance/EnablePerformanceMonitor", True, type=bool)
-        
-        # 更新菜单项状态
-        self.toggle_perf_action.setChecked(enabled)
-        
-        if enabled:
-            # 如果启用且窗口不存在，创建窗口
-            if not self.performance_dock:
-                self.performance_dock = PerformanceWidget(self)
-                self.performance_dock.closed.connect(lambda: self.toggle_performance_monitor(False))
-            
-            # 显示窗口
-            self.performance_dock.setVisible(True)
-        else:
-            # 如果禁用且窗口存在，隐藏窗口
-            if self.performance_dock:
-                self.performance_dock.setVisible(False)
+
 
     def load_settings(self):
         """加载应用程序设置"""
-        # 加载快捷键
-        self.load_shortcuts()
+        # 应用所有设置
+        self.app_settings.apply_all()
         
         # 加载性能监控设置并应用
         self.update_performance_monitor()
@@ -680,3 +674,17 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
+
+    def undo(self):
+        """执行撤销操作"""
+        if self.map_controller.undo():
+            self.status_bar.showMessage("已撤销")
+        else:
+            self.status_bar.showMessage("无法撤销")
+    
+    def redo(self):
+        """执行重做操作"""
+        if self.map_controller.redo():
+            self.status_bar.showMessage("已重做")
+        else:
+            self.status_bar.showMessage("无法重做")
